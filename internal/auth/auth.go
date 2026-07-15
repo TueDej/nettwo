@@ -173,9 +173,8 @@ func GetRemainingVolume(ctx context.Context, username, password string) (string,
 	}
 	defer resp.Body.Close()
 
-	var metaResp json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&metaResp); err != nil {
-		return "", fmt.Errorf("failed to decode metadata: %w", err)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("metadata request failed with status %d", resp.StatusCode)
 	}
 
 	var parsed struct {
@@ -183,8 +182,8 @@ func GetRemainingVolume(ctx context.Context, username, password string) (string,
 			Credit json.Number `json:"credit"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal(metaResp, &parsed); err != nil {
-		return "", fmt.Errorf("failed to parse metadata: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("failed to decode metadata: %w", err)
 	}
 
 	for _, v := range parsed.Result {
