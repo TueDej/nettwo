@@ -42,7 +42,11 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           binary="nettwo-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
-          go build -trimpath -ldflags="-s -w" -o "dist/${binary}" .
+          version="dev"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          fi
+          go build -trimpath -ldflags="-s -w -X nettwo/cmd.version=${version}" -o "dist/${binary}" .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
