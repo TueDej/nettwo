@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -73,11 +74,38 @@ func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response,
 			delay := time.Duration(attempt*attempt) * time.Second
 			ui.Debug(fmt.Sprintf("retrying request: attempt %d delay %v", attempt, delay))
 			ui.StartSpinner(fmt.Sprintf("Retrying... (attempt %d/%d)", attempt, maxRetries))
-			time.Sleep(delay)
+			timer := time.NewTimer(delay)
+			select {
+			case <-req.Context().Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
 		}
 
-		resp, err := c.httpClient.Do(req)
+		attemptReq := req
+		if attempt > 0 && req.Body != nil {
+			if req.GetBody == nil {
+				return nil, fmt.Errorf("request body cannot be replayed for retry")
+			}
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("failed to recreate request body: %w", err)
+			}
+			attemptReq = req.Clone(req.Context())
+			attemptReq.Body = body
+		}
+
+		resp, err := c.httpClient.Do(attemptReq)
 		if err != nil {
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
 			lastErr = err
 			ui.Debug(fmt.Sprintf("request failed: attempt %d error %v", attempt+1, err))
 			continue
@@ -95,7 +123,7 @@ func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response,
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
-func (c *Client) GetCSRFToken() (string, error) {
+func (c *Client) GetCSRFToken(ctx context.Context) (string, error) {
 	parsedURL, err := url.Parse(c.baseURL)
 	if err != nil {
 		return "", err
@@ -108,7 +136,7 @@ func (c *Client) GetCSRFToken() (string, error) {
 	}
 
 	loginURL := c.baseURL + "/en-us/user/login/"
-	req, err := http.NewRequest("GET", loginURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", loginURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

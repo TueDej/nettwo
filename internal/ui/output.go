@@ -17,7 +17,16 @@ var (
 	spinnerStop chan struct{}
 	quietMode   bool
 	verboseMode bool
+	silenced    bool // When true, ALL output is suppressed (used by TUI)
 )
+
+// SetSilenced toggles silent mode that suppresses all terminal output.
+// Used by the TUI to prevent legacy ANSI output from corrupting alt-screen.
+func SetSilenced(s bool) {
+	mu.Lock()
+	silenced = s
+	mu.Unlock()
+}
 
 // Init configures the UI output modes. It is called from the root command's
 // PersistentPreRunE.
@@ -27,39 +36,42 @@ func Init(quiet, verbose bool) {
 }
 
 func Success(msg string) {
-	if quietMode {
+	if quietMode || silenced {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "\033[32m✓\033[0m " + msg)
+	fmt.Fprintln(os.Stderr, "\033[32m✓\033[0m "+msg)
 }
 
 func Error(msg string) {
-	fmt.Fprintln(os.Stderr, "\033[31m✗\033[0m " + msg)
+	if silenced {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "\033[31m✗\033[0m "+msg)
 }
 
 func Warn(msg string) {
-	if quietMode {
+	if quietMode || silenced {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "\033[33m⚠\033[0m " + msg)
+	fmt.Fprintln(os.Stderr, "\033[33m⚠\033[0m "+msg)
 }
 
 func Info(msg string) {
-	if quietMode {
+	if quietMode || silenced {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "\033[34mℹ\033[0m " + msg)
+	fmt.Fprintln(os.Stderr, "\033[34mℹ\033[0m "+msg)
 }
 
 func Debug(msg string) {
-	if !verboseMode {
+	if !verboseMode || silenced {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "\033[90m»\033[0m " + msg)
+	fmt.Fprintln(os.Stderr, "\033[90m»\033[0m "+msg)
 }
 
 func StartSpinner(msg string) {
-	if quietMode {
+	if quietMode || silenced {
 		return
 	}
 	mu.Lock()
@@ -111,20 +123,23 @@ func StopSpinner() {
 		close(spinnerStop)
 		spinnerStop = nil
 	}
+	if silenced {
+		return
+	}
 
 	// Clear the spinner line immediately
 	fmt.Fprint(os.Stderr, "\r\033[K")
 }
 
 func Println(args ...interface{}) {
-	if quietMode {
+	if quietMode || silenced {
 		return
 	}
 	fmt.Fprintln(os.Stderr, args...)
 }
 
 func Printf(format string, args ...interface{}) {
-	if quietMode {
+	if quietMode || silenced {
 		return
 	}
 	fmt.Fprintf(os.Stderr, format+"\n", args...)

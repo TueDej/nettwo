@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"runtime/debug"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"nettwo/internal/tui"
 	"nettwo/internal/ui"
 )
 
@@ -28,9 +30,7 @@ Credentials are stored encrypted using age encryption.`,
 		ui.Init(quiet, verbose)
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runLogin(cmd.Context())
-	},
+	RunE: runTUI,
 }
 
 func Execute() error {
@@ -45,6 +45,24 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(accountCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(tuiCmd)
+}
+
+var tuiCmd = &cobra.Command{
+	Use:   "tui",
+	Short: "Launch interactive TUI",
+	Long:  `Launch the interactive terminal user interface for managing accounts and logging in.`,
+	RunE:  runTUI,
+}
+
+func runTUI(cmd *cobra.Command, args []string) error {
+	ui.SetSilenced(true)
+	defer ui.SetSilenced(false)
+
+	m := tui.NewRootModel()
+	p := tea.NewProgram(m)
+	_, err := p.Run()
+	return err
 }
 
 var versionCmd = &cobra.Command{

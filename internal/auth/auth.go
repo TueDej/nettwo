@@ -30,7 +30,7 @@ func Authenticate(ctx context.Context, username, password string, dryRun bool) (
 	}
 
 	ui.StartSpinner("Fetching CSRF token...")
-	csrfToken, err := client.GetCSRFToken()
+	csrfToken, err := client.GetCSRFToken(ctx)
 	ui.StopSpinner()
 
 	if err != nil {
@@ -67,14 +67,14 @@ func Authenticate(ctx context.Context, username, password string, dryRun bool) (
 	if err != nil {
 		return nil, fmt.Errorf("login request failed: %w", err)
 	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return &AuthResult{
 			Success: false,
 			Message: fmt.Sprintf("login failed with status %d", resp.StatusCode),
 		}, nil
 	}
+	resp.Body.Close()
 
 	ui.Success("Web panel login successful")
 
@@ -130,7 +130,7 @@ func GetRemainingVolume(ctx context.Context, username, password string) (string,
 		return "", err
 	}
 
-	csrfToken, err := client.GetCSRFToken()
+	csrfToken, err := client.GetCSRFToken(ctx)
 	if err != nil {
 		return "", err
 	}
