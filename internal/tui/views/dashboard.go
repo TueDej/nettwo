@@ -46,7 +46,7 @@ func (m *DashboardModel) SetSize(width, height int) {
 	m.height = height
 
 	leftWidth := width * 38 / 100
-	panelHeight := height - 8
+	panelHeight := height - 9
 	if panelHeight < 3 {
 		panelHeight = 3
 	}
@@ -127,7 +127,7 @@ func (m DashboardModel) View() string {
 	leftWidth := m.width * 38 / 100
 	rightWidth := m.width - leftWidth - 1
 
-	panelHeight := m.height - 8
+	panelHeight := m.height - 9
 	if panelHeight < 3 {
 		panelHeight = 3
 	}

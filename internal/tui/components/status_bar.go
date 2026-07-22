@@ -96,7 +96,11 @@ func (m StatusBarModel) View() string {
 			Render("" + frame + " " + m.loadingMsg)
 	}
 
+	emptyLine := styles.StatusBar.
+		Width(m.width).
+		Render("")
+
 	// Always reserve the loading line so the help bar stays at a fixed
 	// vertical position while a refresh starts or finishes.
-	return loadingLine + "\n" + keybindLine
+	return loadingLine + "\n" + keybindLine + "\n" + emptyLine
 }

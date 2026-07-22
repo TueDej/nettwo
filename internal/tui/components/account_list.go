@@ -56,7 +56,7 @@ func NewAccountListModel() AccountListModel {
 		PaddingRight(0)
 
 	delegate.Styles.SelectedDesc = lipgloss.NewStyle().
-		Foreground(styles.Foreground).
+		Foreground(styles.Accent).
 		PaddingLeft(1).
 		PaddingRight(0)
 
