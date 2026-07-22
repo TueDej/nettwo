@@ -20,18 +20,6 @@ A terminal client for authenticating with the Sharif University network portal (
 ./nettwo login
 ```
 
-## TUI controls
-
-| Key | Action |
-| --- | --- |
-| `j` / `k` or arrow keys | Select an account |
-| `Enter` | Authenticate and activate the selected account |
-| `a` | Add an account |
-| `d` | Delete the selected account |
-| `r` | Refresh remaining volumes |
-| `Esc` | Cancel login or return to the dashboard |
-| `q` / `Ctrl+C` | Quit |
-
 ## CLI commands
 
 ```bash
