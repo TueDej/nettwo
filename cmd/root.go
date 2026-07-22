@@ -12,11 +12,12 @@ import (
 )
 
 var (
-	version = "dev"
-	commit  = "unknown"
-	date    = "unknown"
-	quiet   bool
-	verbose bool
+	version     = "dev"
+	commit      = "unknown"
+	date        = "unknown"
+	quiet       bool
+	verbose     bool
+	showVersion bool
 )
 
 var rootCmd = &cobra.Command{
@@ -30,7 +31,7 @@ Credentials are stored encrypted using age encryption.`,
 		ui.Init(quiet, verbose)
 		return nil
 	},
-	RunE: runTUI,
+	RunE: runRoot,
 }
 
 func Execute() error {
@@ -40,12 +41,20 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Suppress non-error output")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
-	rootCmd.Flags().BoolP("version", "V", false, "Print version information")
+	rootCmd.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version information")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(accountCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(tuiCmd)
+}
+
+func runRoot(cmd *cobra.Command, args []string) error {
+	if showVersion {
+		printVersion()
+		return nil
+	}
+	return runTUI(cmd, args)
 }
 
 var tuiCmd = &cobra.Command{

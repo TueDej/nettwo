@@ -13,10 +13,7 @@ import (
 // LoginModel shows a spinner while authenticating, then the result.
 type LoginModel struct {
 	username string
-	result   string
-	success  bool
-	done     bool
-	spinIdx  int  // spinner frame index
+	spinIdx  int // spinner frame index
 	width    int
 	height   int
 }
@@ -37,23 +34,12 @@ func (m *LoginModel) SetSize(width, height int) {
 
 func (m *LoginModel) StartLogin(username string) {
 	m.username = username
-	m.result = ""
-	m.success = false
-	m.done = false
 	m.spinIdx = 0
 }
 
 func (m *LoginModel) Tick() {
 	m.spinIdx = (m.spinIdx + 1) % len(spinnerFrames)
 }
-
-func (m *LoginModel) CompleteLogin(success bool, message string) {
-	m.done = true
-	m.success = success
-	m.result = message
-}
-
-func (m LoginModel) IsDone() bool { return m.done }
 
 func (m *LoginModel) Update(msg tea.Msg) (LoginModel, tea.Cmd) {
 	return *m, nil
@@ -72,28 +58,12 @@ func (m LoginModel) View() string {
 	lines = append(lines, header)
 	lines = append(lines, "")
 
-	if !m.done {
-		// Spinner + status
-		frame := spinnerFrames[m.spinIdx%len(spinnerFrames)]
-		spin := lipgloss.NewStyle().Foreground(styles.Primary).Render(frame)
-		msg := lipgloss.NewStyle().Foreground(styles.Foreground).Render("Authenticating...")
-		lines = append(lines, fmt.Sprintf("  %s  %s", spin, msg))
-		lines = append(lines, "")
-		lines = append(lines, styles.HelpText.Render("  Press [esc] to cancel"))
-	} else {
-		// Result
-		if m.success {
-			lines = append(lines, fmt.Sprintf("  %s  %s",
-				styles.SuccessMessage.Render("✓"),
-				styles.SuccessMessage.Render(m.result)))
-		} else {
-			lines = append(lines, fmt.Sprintf("  %s  %s",
-				styles.ErrorMessage.Render("✗"),
-				styles.ErrorMessage.Render(m.result)))
-		}
-		lines = append(lines, "")
-		lines = append(lines, styles.HelpText.Render("  Press [enter] or [esc] to return"))
-	}
+	frame := spinnerFrames[m.spinIdx%len(spinnerFrames)]
+	spin := lipgloss.NewStyle().Foreground(styles.Primary).Render(frame)
+	msg := lipgloss.NewStyle().Foreground(styles.Foreground).Render("Authenticating...")
+	lines = append(lines, fmt.Sprintf("  %s  %s", spin, msg))
+	lines = append(lines, "")
+	lines = append(lines, styles.HelpText.Render("  Press [esc] to cancel"))
 
 	content := strings.Join(lines, "\n")
 

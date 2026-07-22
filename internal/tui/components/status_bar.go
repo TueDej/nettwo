@@ -14,7 +14,6 @@ var spinnerFrames = []string{
 
 type StatusBarModel struct {
 	keys       []KeyBinding
-	context    string
 	width      int
 	loading    bool
 	loadingMsg string
@@ -39,8 +38,7 @@ func NewStatusBarModel() StatusBarModel {
 	}
 }
 
-func (m *StatusBarModel) SetWidth(width int)    { m.width = width }
-func (m *StatusBarModel) SetContext(ctx string) { m.context = ctx }
+func (m *StatusBarModel) SetWidth(width int) { m.width = width }
 func (m *StatusBarModel) SetLoading(loading bool, msg string) {
 	wasLoading := m.loading
 	previousMsg := m.loadingMsg
@@ -74,22 +72,8 @@ func (m StatusBarModel) View() string {
 		contentWidth = 0
 	}
 
-	// Right side context
-	right := ""
-	if m.context != "" {
-		right = styles.HelpText.Render(m.context)
-	}
-
 	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
-	padding := contentWidth - leftWidth - rightWidth
-
-	// If content overflows, hide right context first
-	if padding < 0 && right != "" {
-		right = ""
-		rightWidth = 0
-		padding = contentWidth - leftWidth
-	}
+	padding := contentWidth - leftWidth
 
 	// If still overflowing, truncate left content
 	if padding < 0 {
@@ -99,7 +83,7 @@ func (m StatusBarModel) View() string {
 
 	keybindLine := styles.StatusBar.
 		Width(m.width).
-		Render(left + strings.Repeat(" ", padding) + right)
+		Render(left + strings.Repeat(" ", padding))
 
 	loadingLine := styles.StatusBar.
 		Width(m.width).

@@ -41,26 +41,26 @@ type RootModel struct {
 	modal components.ModalModel
 
 	// Login state
-	pendingUsername string
-	loggingIn       bool
-	loginCancelled  bool
-	loginCtx        context.Context
-	loginCancel     context.CancelFunc
+	pendingUsername   string
+	loggingIn         bool
+	loginGeneration   uint64
+	loginCtx          context.Context
+	loginCancel       context.CancelFunc
+	refreshGeneration uint64
+	refreshCancel     context.CancelFunc
 
 	// State
-	loaded   bool
 	err      error
 	quitting bool
 }
 
-func NewRootModel() RootModel {
-	return RootModel{
-		currentView:    dashboardView,
-		dashboard:      views.NewDashboardModel(),
-		login:          views.NewLoginModel(),
-		modal:          components.NewModalModel(),
-		loggingIn:      false,
-		loginCancelled: false,
+func NewRootModel() *RootModel {
+	return &RootModel{
+		currentView: dashboardView,
+		dashboard:   views.NewDashboardModel(),
+		login:       views.NewLoginModel(),
+		modal:       components.NewModalModel(),
+		loggingIn:   false,
 	}
 }
 
@@ -77,7 +77,7 @@ func (m *RootModel) handleWindowSizeMsg(msg tea.WindowSizeMsg) {
 	m.modal.SetSize(msg.Width, msg.Height)
 }
 
-func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.handleWindowSizeMsg(msg)
@@ -124,6 +124,10 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loginCancel()
 				m.loginCancel = nil
 			}
+			if m.refreshCancel != nil {
+				m.refreshCancel()
+				m.refreshCancel = nil
+			}
 			m.quitting = true
 			return m, tea.Quit
 
@@ -147,17 +151,23 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dashboard.SetLoading(false, "")
 			return m, nil
 		}
-		m.loaded = true
 		m.dashboard.UpdateAccounts(msg.Accounts, nil)
 		// Only auto-fetch volumes if there are accounts to fetch for
 		if len(msg.Accounts) > 0 {
 			m.dashboard.SetLoading(true, "Fetching volumes...")
-			return m, tea.Batch(commands.FetchAllVolumesCmd(msg.Accounts), m.nextSpinnerTick())
+			return m, tea.Batch(commands.FetchAllVolumesCmdWithContext(context.Background(), msg.Accounts, m.refreshGeneration, 0), m.nextSpinnerTick())
 		}
 		m.dashboard.SetLoading(false, "")
 		return m, nil
 
 	case commands.AllVolumesFetchedMsg:
+		if msg.Generation != m.refreshGeneration {
+			return m, nil
+		}
+		if m.refreshCancel != nil {
+			m.refreshCancel()
+			m.refreshCancel = nil
+		}
 		accounts, existingVols := m.dashboard.GetAccounts()
 		// Merge: keep existing volumes for accounts that didn't refresh
 		for k, v := range msg.Volumes {
@@ -167,22 +177,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboard.SetLoading(false, "")
 		return m, nil
 
-	case commands.VolumeFetchedMsg:
-		if msg.Err == nil {
-			m.dashboard.UpdateVolume(msg.Username, msg.Volume)
-		}
-
 	case commands.LoginCompleteMsg:
-		// Check if login was cancelled by the user
-		if m.loginCancelled {
-			m.loginCancelled = false
-			m.loggingIn = false
-			m.loginCtx = nil
-			m.loginCancel = nil
-			m.pendingUsername = ""
-			m.currentView = dashboardView
-			m.login.CompleteLogin(false, "Login cancelled")
-			m.dashboard.AddActivity("Login cancelled", false)
+		if msg.Generation != m.loginGeneration {
 			return m, nil
 		}
 
@@ -191,10 +187,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loginCancel = nil
 		m.currentView = dashboardView
 		if msg.Err != nil {
-			m.login.CompleteLogin(false, msg.Err.Error())
 			m.dashboard.AddActivity(fmt.Sprintf("Login failed: %v", msg.Err), false)
 		} else {
-			m.login.CompleteLogin(msg.Success, msg.Message)
 			if msg.Success {
 				m.dashboard.SetLoggedIn(m.pendingUsername)
 			} else {
@@ -224,10 +218,10 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case startAuthMsg:
 		// Got credentials — now authenticate
-		if m.loginCancelled || !m.loggingIn || m.loginCtx == nil {
+		if !m.loggingIn || m.loginCtx == nil || msg.generation != m.loginGeneration {
 			return m, nil
 		}
-		return m, commands.AuthenticateCmd(m.loginCtx, msg.username, msg.password, false)
+		return m, commands.AuthenticateCmd(m.loginCtx, msg.username, msg.password, false, msg.generation)
 
 	case tickSpinnerMsg:
 		// Tick the status bar loading spinner
@@ -258,7 +252,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "a":
 		m.modal.ShowAddAccount()
@@ -278,8 +272,15 @@ func (m RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	case "r":
 		accounts, _ := m.dashboard.GetAccounts()
 		if len(accounts) > 0 {
+			if m.dashboard.IsLoading() {
+				return m, nil
+			}
+			m.refreshGeneration++
+			m.refreshCancel = nil
+			var refreshCtx context.Context
+			refreshCtx, m.refreshCancel = context.WithCancel(context.Background())
 			m.dashboard.SetLoading(true, "Refreshing volumes...")
-			return m, tea.Batch(commands.FetchAllVolumesCmdMinDuration(accounts, 1500*time.Millisecond), m.nextSpinnerTick())
+			return m, tea.Batch(commands.FetchAllVolumesCmdWithContext(refreshCtx, accounts, m.refreshGeneration, 1500*time.Millisecond), m.nextSpinnerTick())
 		}
 		// No accounts: log and do nothing (keeps the menu interactive)
 		m.dashboard.AddActivity("No accounts to refresh", false)
@@ -291,11 +292,12 @@ func (m RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 			m.pendingUsername = selected
 			m.currentView = loginView
 			m.loggingIn = true
-			m.loginCancelled = false
+			m.loginGeneration++
+			generation := m.loginGeneration
 			m.loginCtx, m.loginCancel = context.WithCancel(context.Background())
 			m.login.StartLogin(selected)
 			// Start spinner animation + fetch credentials
-			return m, tea.Batch(m.startLoginCmd(selected), m.nextSpinnerTick())
+			return m, tea.Batch(m.startLoginCmd(selected, generation), m.nextSpinnerTick())
 		}
 		return m, nil
 	}
@@ -307,26 +309,17 @@ func (m RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 }
 
 func (m *RootModel) handleLoginKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.login.IsDone() {
-		switch msg.String() {
-		case "enter", "esc":
-			m.currentView = dashboardView
-			m.pendingUsername = ""
-			return m, commands.LoadAccountsCmd()
-		}
-		return m, nil
-	}
-
 	switch msg.String() {
 	case "esc":
 		if m.loginCancel != nil {
 			m.loginCancel()
 			m.loginCancel = nil
 		}
+		m.loginGeneration++
 		m.currentView = dashboardView
-		m.loginCancelled = true
 		m.loggingIn = false
 		m.pendingUsername = ""
+		m.dashboard.AddActivity("Login cancelled", false)
 		return m, nil
 	}
 
@@ -386,23 +379,20 @@ func (m RootModel) View() tea.View {
 
 // --- Login credential helpers ---
 
-func getAccount(username string) (*config.Account, error) {
-	return config.GetAccount(username)
-}
-
-func (m RootModel) startLoginCmd(username string) tea.Cmd {
+func (m RootModel) startLoginCmd(username string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		account, err := getAccount(username)
+		account, err := config.GetAccount(username)
 		if err != nil {
-			return commands.LoginCompleteMsg{Err: err}
+			return commands.LoginCompleteMsg{Err: err, Generation: generation}
 		}
-		return startAuthMsg{username: username, password: account.Password}
+		return startAuthMsg{username: username, password: account.Password, generation: generation}
 	}
 }
 
 type startAuthMsg struct {
-	username string
-	password string
+	username   string
+	password   string
+	generation uint64
 }
 
 // --- Spinner animation ---

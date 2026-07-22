@@ -189,7 +189,7 @@ func GetRemainingVolume(ctx context.Context, username, password string) (string,
 	for _, v := range parsed.Result {
 		credit, err := v.Credit.Float64()
 		if err != nil {
-			return "", nil
+			return "", fmt.Errorf("invalid volume credit %q: %w", v.Credit.String(), err)
 		}
 		if credit <= 0 {
 			return "Out of volume", nil

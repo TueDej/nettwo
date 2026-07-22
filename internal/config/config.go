@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"filippo.io/age"
-	"gopkg.in/yaml.v3"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+	"gopkg.in/yaml.v3"
 )
 
 type yamlParser struct{}
@@ -42,12 +43,15 @@ var (
 // When set, GetConfigDir will return this path instead of the default.
 var testConfigDir string
 var testConfigDirMu sync.Mutex
+var credentialsMu sync.Mutex
+var identityMu sync.Mutex
 
 type Config struct {
-	BaseURL       string `yaml:"base_url" koanf:"base_url"`
-	ConnectTimeout int   `yaml:"connect_timeout" koanf:"connect_timeout"`
-	RequestTimeout int   `yaml:"request_timeout" koanf:"request_timeout"`
-	MaxRetries     int   `yaml:"max_retries" koanf:"max_retries"`
+	BaseURL            string `yaml:"base_url" koanf:"base_url"`
+	ConnectTimeout     int    `yaml:"connect_timeout" koanf:"connect_timeout"`
+	RequestTimeout     int    `yaml:"request_timeout" koanf:"request_timeout"`
+	MaxRetries         int    `yaml:"max_retries" koanf:"max_retries"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify" koanf:"insecure_skip_verify"`
 }
 
 type Credentials struct {
@@ -60,10 +64,11 @@ type Account struct {
 }
 
 var defaultConfig = Config{
-	BaseURL:        "https://net2.sharif.edu",
-	ConnectTimeout: 10,
-	RequestTimeout: 30,
-	MaxRetries:     3,
+	BaseURL:            "https://net2.sharif.edu",
+	ConnectTimeout:     10,
+	RequestTimeout:     30,
+	MaxRetries:         3,
+	InsecureSkipVerify: false,
 }
 
 func GetConfigDir() (string, error) {
@@ -115,9 +120,6 @@ func identityFilePath() (string, error) {
 
 func Load() (*Config, error) {
 	k := koanf.New(".")
-	k.Load(env.Provider("NETTWO_", ".", func(s string) string {
-		return strings.ToLower(strings.ReplaceAll(s, "_", "-"))
-	}), nil)
 
 	path, err := configFilePath()
 	if err != nil {
@@ -128,13 +130,41 @@ func Load() (*Config, error) {
 		if err := k.Load(file.Provider(path), yamlParserInstance); err != nil {
 			return nil, fmt.Errorf("failed to load config: %w", err)
 		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to inspect config: %w", err)
+	}
+
+	if err := k.Load(env.Provider("NETTWO_", ".", func(s string) string {
+		return strings.ToLower(strings.TrimPrefix(s, "NETTWO_"))
+	}), nil); err != nil {
+		return nil, fmt.Errorf("failed to load environment config: %w", err)
 	}
 
 	cfg := defaultConfig
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	if err := validate(&cfg); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+func validate(cfg *Config) error {
+	parsed, err := url.Parse(cfg.BaseURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return fmt.Errorf("base_url must be a valid http(s) URL")
+	}
+	if cfg.ConnectTimeout <= 0 {
+		return fmt.Errorf("connect_timeout must be greater than zero")
+	}
+	if cfg.RequestTimeout <= 0 {
+		return fmt.Errorf("request_timeout must be greater than zero")
+	}
+	if cfg.MaxRetries < 0 {
+		return fmt.Errorf("max_retries cannot be negative")
+	}
+	return nil
 }
 
 func Save(cfg *Config) error {
@@ -148,10 +178,38 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0600)
+	return writeAtomic(path, data, 0600)
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".nettwo-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func loadIdentity() (*age.X25519Identity, error) {
+	identityMu.Lock()
+	defer identityMu.Unlock()
+	return loadIdentityUnlocked()
+}
+
+func loadIdentityUnlocked() (*age.X25519Identity, error) {
 	path, err := identityFilePath()
 	if err != nil {
 		return nil, err
@@ -179,7 +237,7 @@ func generateIdentity(path string) (*age.X25519Identity, error) {
 	}
 
 	// The identity.String() returns the armored key
-	if err := os.WriteFile(path, []byte(identity.String()), 0600); err != nil {
+	if err := writeAtomic(path, []byte(identity.String()), 0600); err != nil {
 		return nil, fmt.Errorf("failed to write identity: %w", err)
 	}
 	return identity, nil
@@ -226,6 +284,12 @@ func LoadCredentials() (*Credentials, error) {
 }
 
 func SaveCredentials(creds *Credentials) error {
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
+	return saveCredentials(creds)
+}
+
+func saveCredentials(creds *Credentials) error {
 	credsPath, err := credentialsFilePath()
 	if err != nil {
 		return err
@@ -254,10 +318,12 @@ func SaveCredentials(creds *Credentials) error {
 		return fmt.Errorf("failed to close encryptor: %w", err)
 	}
 
-	return os.WriteFile(credsPath, buf.Bytes(), 0600)
+	return writeAtomic(credsPath, buf.Bytes(), 0600)
 }
 
 func AddAccount(username, password string) error {
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
 	creds, err := LoadCredentials()
 	if err != nil {
 		return err
@@ -266,15 +332,17 @@ func AddAccount(username, password string) error {
 	for i, acc := range creds.Accounts {
 		if acc.Username == username {
 			creds.Accounts[i].Password = password
-			return SaveCredentials(creds)
+			return saveCredentials(creds)
 		}
 	}
 
 	creds.Accounts = append(creds.Accounts, Account{Username: username, Password: password})
-	return SaveCredentials(creds)
+	return saveCredentials(creds)
 }
 
 func DeleteAccount(username string) error {
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
 	creds, err := LoadCredentials()
 	if err != nil {
 		return err
@@ -295,7 +363,7 @@ func DeleteAccount(username string) error {
 	}
 
 	creds.Accounts = newAccounts
-	return SaveCredentials(creds)
+	return saveCredentials(creds)
 }
 
 func GetAccount(username string) (*Account, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -46,7 +47,7 @@ func NewClean(cfg *config.Config) (*Client, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		},
 		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        10,
@@ -68,6 +69,9 @@ func NewClean(cfg *config.Config) (*Client, error) {
 }
 
 func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response, error) {
+	if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
+		maxRetries = 0
+	}
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -112,6 +116,10 @@ func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response,
 		}
 
 		if resp.StatusCode >= 500 && resp.StatusCode < 600 {
+			if attempt == maxRetries {
+				return resp, nil
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			lastErr = fmt.Errorf("server error: %d", resp.StatusCode)
 			ui.Debug(fmt.Sprintf("server error: status %d", resp.StatusCode))
@@ -156,7 +164,10 @@ func (c *Client) GetCSRFToken(ctx context.Context) (string, error) {
 }
 
 func (c *Client) SaveCookies() error {
-	parsedURL, _ := url.Parse(c.baseURL)
+	parsedURL, err := url.Parse(c.baseURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse base URL: %w", err)
+	}
 	cookies := c.httpClient.Jar.Cookies(parsedURL)
 	if len(cookies) == 0 {
 		return nil
@@ -172,7 +183,7 @@ func (c *Client) SaveCookies() error {
 		return err
 	}
 
-	return os.WriteFile(cookieDir, data, 0600)
+	return writeAtomic(cookieDir, data, 0600)
 }
 
 func (c *Client) loadCookies() error {
@@ -189,7 +200,10 @@ func (c *Client) loadCookies() error {
 		return err
 	}
 
-	parsedURL, _ := url.Parse(c.baseURL)
+	parsedURL, err := url.Parse(c.baseURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse base URL: %w", err)
+	}
 	var cookies []*http.Cookie
 	if err := json.Unmarshal(data, &cookies); err != nil {
 		return err
@@ -201,4 +215,25 @@ func (c *Client) loadCookies() error {
 
 func (c *Client) Close() error {
 	return c.SaveCookies()
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".nettwo-cookie-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

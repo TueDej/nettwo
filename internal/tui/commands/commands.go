@@ -18,27 +18,16 @@ type AccountsLoadedMsg struct {
 	Err      error
 }
 
-type VolumeFetchedMsg struct {
-	Username string
-	Volume   string
-	Err      error
-}
-
 type AllVolumesFetchedMsg struct {
-	Volumes map[string]string
-}
-
-type LoginStepMsg struct {
-	Step    int
-	Success bool
-	Message string
-	Err     error
+	Volumes    map[string]string
+	Generation uint64
 }
 
 type LoginCompleteMsg struct {
-	Success bool
-	Message string
-	Err     error
+	Success    bool
+	Message    string
+	Err        error
+	Generation uint64
 }
 
 type AccountSavedMsg struct {
@@ -61,27 +50,17 @@ func LoadAccountsCmd() tea.Cmd {
 	}
 }
 
-func FetchVolumeCmd(username, password string) tea.Cmd {
-	return func() tea.Msg {
-		vol, err := auth.GetRemainingVolume(context.Background(), username, password)
-		if err != nil {
-			return VolumeFetchedMsg{Username: username, Err: err}
-		}
-		return VolumeFetchedMsg{Username: username, Volume: vol}
-	}
-}
-
 func FetchAllVolumesCmd(accounts []string) tea.Cmd {
-	return fetchAllVolumesCmd(accounts, 0)
+	return FetchAllVolumesCmdWithContext(context.Background(), accounts, 0, 0)
 }
 
 // FetchAllVolumesCmdMinDuration keeps the refresh state visible long enough
 // for the spinner to be useful, even when the server responds immediately.
 func FetchAllVolumesCmdMinDuration(accounts []string, minimum time.Duration) tea.Cmd {
-	return fetchAllVolumesCmd(accounts, minimum)
+	return FetchAllVolumesCmdWithContext(context.Background(), accounts, 0, minimum)
 }
 
-func fetchAllVolumesCmd(accounts []string, minimum time.Duration) tea.Cmd {
+func FetchAllVolumesCmdWithContext(ctx context.Context, accounts []string, generation uint64, minimum time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		started := time.Now()
 		volumes := make(map[string]string)
@@ -99,7 +78,7 @@ func fetchAllVolumesCmd(accounts []string, minimum time.Duration) tea.Cmd {
 					results <- result{username: username, err: err}
 					return
 				}
-				vol, err := auth.GetRemainingVolume(context.Background(), username, account.Password)
+				vol, err := auth.GetRemainingVolume(ctx, username, account.Password)
 				if err != nil {
 					results <- result{username: username, err: err}
 					return
@@ -116,20 +95,30 @@ func fetchAllVolumesCmd(accounts []string, minimum time.Duration) tea.Cmd {
 		}
 
 		if remaining := minimum - time.Since(started); remaining > 0 {
-			time.Sleep(remaining)
+			timer := time.NewTimer(remaining)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			case <-timer.C:
+			}
 		}
 
-		return AllVolumesFetchedMsg{Volumes: volumes}
+		return AllVolumesFetchedMsg{Volumes: volumes, Generation: generation}
 	}
 }
 
-func AuthenticateCmd(ctx context.Context, username, password string, dryRun bool) tea.Cmd {
+func AuthenticateCmd(ctx context.Context, username, password string, dryRun bool, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		result, err := auth.Authenticate(ctx, username, password, dryRun)
 		if err != nil {
-			return LoginCompleteMsg{Err: err}
+			return LoginCompleteMsg{Err: err, Generation: generation}
 		}
-		return LoginCompleteMsg{Success: result.Success, Message: result.Message}
+		return LoginCompleteMsg{Success: result.Success, Message: result.Message, Generation: generation}
 	}
 }
 

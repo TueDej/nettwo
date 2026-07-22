@@ -21,6 +21,9 @@ jobs:
           - goos: linux
             goarch: arm64
             suffix: ""
+          - goos: linux
+            goarch: 386
+            suffix: ""
           - goos: windows
             goarch: amd64
             suffix: ".exe"
