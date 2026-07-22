@@ -18,6 +18,7 @@ var (
 	quiet       bool
 	verbose     bool
 	showVersion bool
+	autoMode    bool
 )
 
 var rootCmd = &cobra.Command{
@@ -39,9 +40,14 @@ func Execute() error {
 }
 
 func init() {
+	rootCmd.Flags().SortFlags = false
+	rootCmd.PersistentFlags().SortFlags = false
+
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Suppress non-error output")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version information")
+	rootCmd.Flags().BoolP("help", "h", false, "help for nettwo")
+	rootCmd.PersistentFlags().BoolVarP(&autoMode, "auto", "k", false, "Auto-connect to the last connected user")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(accountCmd)
@@ -53,6 +59,9 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	if showVersion {
 		printVersion()
 		return nil
+	}
+	if autoMode {
+		return runAutoLogin(cmd.Context())
 	}
 	return runTUI(cmd, args)
 }

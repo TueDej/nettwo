@@ -45,6 +45,12 @@ The first TUI launch lets you add an account. Saved credentials are encrypted lo
 # Authenticate interactively or use a saved account
 ./nettwo login
 
+# Auto-connect to the last used account
+./nettwo --auto
+
+# Same via the login subcommand
+./nettwo login --auto
+
 # Authenticate without activating the gateway
 ./nettwo login --dry-run
 
@@ -66,6 +72,10 @@ Global output flags are available on CLI commands:
 ./nettwo --quiet login
 ./nettwo --verbose login
 ```
+
+The `--auto` (`-k`) flag reuses the last successfully connected account and
+authenticates without any prompts. The last used username is stored in the
+platform's user cache directory (e.g. `~/.cache/nettwo/last_username`).
 
 ## Configuration
 

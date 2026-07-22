@@ -33,10 +33,11 @@ func (yamlParser) Marshal(m map[string]any) ([]byte, error) {
 var yamlParserInstance = yamlParser{}
 
 var (
-	configDirName       = "nettwo"
-	configFileName      = "config.yaml"
-	credentialsFileName = "credentials.age"
-	identityFileName    = "identity.age"
+	configDirName        = "nettwo"
+	configFileName       = "config.yaml"
+	credentialsFileName  = "credentials.age"
+	identityFileName     = "identity.age"
+	lastUsernameFileName = "last_username"
 )
 
 // testConfigDir is used to override the config directory for testing.
@@ -92,6 +93,18 @@ func GetConfigDir() (string, error) {
 		return "", fmt.Errorf("failed to create config dir: %w", err)
 	}
 	return appConfigDir, nil
+}
+
+func GetCacheDir() (string, error) {
+	baseCacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user cache dir: %w", err)
+	}
+	appCacheDir := filepath.Join(baseCacheDir, configDirName)
+	if err := os.MkdirAll(appCacheDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create cache dir: %w", err)
+	}
+	return appCacheDir, nil
 }
 
 func configFilePath() (string, error) {
@@ -391,6 +404,37 @@ func ListAccounts() ([]string, error) {
 		usernames[i] = acc.Username
 	}
 	return usernames, nil
+}
+
+func lastUsernameFilePath() (string, error) {
+	dir, err := GetCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, lastUsernameFileName), nil
+}
+
+func SetLastUsername(username string) error {
+	path, err := lastUsernameFilePath()
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, []byte(username), 0600)
+}
+
+func GetLastUsername() (string, error) {
+	path, err := lastUsernameFilePath()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no last connected user found")
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func ValidateCredentials(username, password string) (*Account, error) {

@@ -32,7 +32,37 @@ func init() {
 	loginCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Test authentication without connecting")
 }
 
+func runAutoLogin(ctx context.Context) error {
+	lastUsername, err := config.GetLastUsername()
+	if err != nil {
+		return fmt.Errorf("auto-connect failed: %w", err)
+	}
+
+	account, err := config.GetAccount(lastUsername)
+	if err != nil {
+		return fmt.Errorf("auto-connect failed: %w", err)
+	}
+
+	result, err := auth.Authenticate(ctx, lastUsername, account.Password, dryRun)
+	if err != nil {
+		return err
+	}
+
+	if result.Success {
+		ui.Success(result.Message)
+	} else {
+		ui.Error(result.Message)
+		return fmt.Errorf("authentication failed: %s", result.Message)
+	}
+
+	return nil
+}
+
 func runLogin(ctx context.Context) error {
+	if autoMode {
+		return runAutoLogin(ctx)
+	}
+
 	if username == "" || password == "" {
 		accounts, err := config.ListAccounts()
 		if err != nil {
@@ -83,6 +113,9 @@ func runLogin(ctx context.Context) error {
 
 	if result.Success {
 		ui.Success(result.Message)
+		if err := config.SetLastUsername(username); err != nil {
+			ui.Warn("Failed to save last connected user: " + err.Error())
+		}
 	} else {
 		ui.Error(result.Message)
 		return fmt.Errorf("authentication failed: %s", result.Message)
