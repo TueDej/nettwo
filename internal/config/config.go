@@ -16,6 +16,9 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"gopkg.in/yaml.v3"
+
+	"nettwo/internal/ui"
+	"nettwo/internal/util"
 )
 
 type yamlParser struct{}
@@ -45,7 +48,6 @@ var (
 var testConfigDir string
 var testConfigDirMu sync.Mutex
 var credentialsMu sync.Mutex
-var identityMu sync.Mutex
 
 type Config struct {
 	BaseURL            string `yaml:"base_url" koanf:"base_url"`
@@ -96,6 +98,17 @@ func GetConfigDir() (string, error) {
 }
 
 func GetCacheDir() (string, error) {
+	testConfigDirMu.Lock()
+	if testConfigDir != "" {
+		dir := testConfigDir
+		testConfigDirMu.Unlock()
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return "", fmt.Errorf("failed to create cache dir: %w", err)
+		}
+		return dir, nil
+	}
+	testConfigDirMu.Unlock()
+
 	baseCacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user cache dir: %w", err)
@@ -168,6 +181,9 @@ func validate(cfg *Config) error {
 	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
 		return fmt.Errorf("base_url must be a valid http(s) URL")
 	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return fmt.Errorf("base_url must not contain a path component")
+	}
 	if cfg.ConnectTimeout <= 0 {
 		return fmt.Errorf("connect_timeout must be greater than zero")
 	}
@@ -191,34 +207,12 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return writeAtomic(path, data, 0600)
-}
-
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".nettwo-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return util.WriteAtomic(path, data, 0600)
 }
 
 func loadIdentity() (*age.X25519Identity, error) {
-	identityMu.Lock()
-	defer identityMu.Unlock()
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
 	return loadIdentityUnlocked()
 }
 
@@ -238,7 +232,11 @@ func loadIdentityUnlocked() (*age.X25519Identity, error) {
 
 	identity, err := age.ParseX25519Identity(string(data))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse identity: %w", err)
+		// Backup corrupt identity file and generate new one
+		backupPath := path + ".corrupt"
+		_ = os.Rename(path, backupPath)
+		ui.Warn(fmt.Sprintf("Corrupt identity file backed up to %s, generating new identity", backupPath))
+		return generateIdentity(path)
 	}
 	return identity, nil
 }
@@ -250,19 +248,25 @@ func generateIdentity(path string) (*age.X25519Identity, error) {
 	}
 
 	// The identity.String() returns the armored key
-	if err := writeAtomic(path, []byte(identity.String()), 0600); err != nil {
+	if err := util.WriteAtomic(path, []byte(identity.String()), 0600); err != nil {
 		return nil, fmt.Errorf("failed to write identity: %w", err)
 	}
 	return identity, nil
 }
 
 func LoadCredentials() (*Credentials, error) {
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
+	return loadCredentialsUnlocked()
+}
+
+func loadCredentialsUnlocked() (*Credentials, error) {
 	credsPath, err := credentialsFilePath()
 	if err != nil {
 		return nil, err
 	}
 
-	identity, err := loadIdentity()
+	identity, err := loadIdentityUnlocked()
 	if err != nil {
 		return nil, err
 	}
@@ -299,16 +303,22 @@ func LoadCredentials() (*Credentials, error) {
 func SaveCredentials(creds *Credentials) error {
 	credentialsMu.Lock()
 	defer credentialsMu.Unlock()
-	return saveCredentials(creds)
+	return saveCredentialsUnlocked(creds)
 }
 
 func saveCredentials(creds *Credentials) error {
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
+	return saveCredentialsUnlocked(creds)
+}
+
+func saveCredentialsUnlocked(creds *Credentials) error {
 	credsPath, err := credentialsFilePath()
 	if err != nil {
 		return err
 	}
 
-	identity, err := loadIdentity()
+	identity, err := loadIdentityUnlocked()
 	if err != nil {
 		return err
 	}
@@ -331,13 +341,26 @@ func saveCredentials(creds *Credentials) error {
 		return fmt.Errorf("failed to close encryptor: %w", err)
 	}
 
-	return writeAtomic(credsPath, buf.Bytes(), 0600)
+	return util.WriteAtomic(credsPath, buf.Bytes(), 0600)
+}
+
+func AccountExists(username string) (bool, error) {
+	creds, err := LoadCredentials()
+	if err != nil {
+		return false, err
+	}
+	for _, acc := range creds.Accounts {
+		if acc.Username == username {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func AddAccount(username, password string) error {
 	credentialsMu.Lock()
 	defer credentialsMu.Unlock()
-	creds, err := LoadCredentials()
+	creds, err := loadCredentialsUnlocked()
 	if err != nil {
 		return err
 	}
@@ -345,18 +368,18 @@ func AddAccount(username, password string) error {
 	for i, acc := range creds.Accounts {
 		if acc.Username == username {
 			creds.Accounts[i].Password = password
-			return saveCredentials(creds)
+			return saveCredentialsUnlocked(creds)
 		}
 	}
 
 	creds.Accounts = append(creds.Accounts, Account{Username: username, Password: password})
-	return saveCredentials(creds)
+	return saveCredentialsUnlocked(creds)
 }
 
 func DeleteAccount(username string) error {
 	credentialsMu.Lock()
 	defer credentialsMu.Unlock()
-	creds, err := LoadCredentials()
+	creds, err := loadCredentialsUnlocked()
 	if err != nil {
 		return err
 	}
@@ -376,7 +399,7 @@ func DeleteAccount(username string) error {
 	}
 
 	creds.Accounts = newAccounts
-	return saveCredentials(creds)
+	return saveCredentialsUnlocked(creds)
 }
 
 func GetAccount(username string) (*Account, error) {
@@ -407,6 +430,14 @@ func ListAccounts() ([]string, error) {
 }
 
 func lastUsernameFilePath() (string, error) {
+	dir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, lastUsernameFileName), nil
+}
+
+func legacyLastUsernameFilePath() (string, error) {
 	dir, err := GetCacheDir()
 	if err != nil {
 		return "", err
@@ -419,7 +450,7 @@ func SetLastUsername(username string) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, []byte(username), 0600)
+	return util.WriteAtomic(path, []byte(username), 0600)
 }
 
 func GetLastUsername() (string, error) {
@@ -430,6 +461,13 @@ func GetLastUsername() (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Fall back to the legacy cache-dir location.
+			legacyPath, legacyErr := legacyLastUsernameFilePath()
+			if legacyErr == nil && legacyPath != path {
+				if legacyData, readErr := os.ReadFile(legacyPath); readErr == nil {
+					return strings.TrimSpace(string(legacyData)), nil
+				}
+			}
 			return "", fmt.Errorf("no last connected user found")
 		}
 		return "", err

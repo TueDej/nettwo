@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -26,11 +27,11 @@ type ModalModel struct {
 	Cancelled bool
 
 	// For input modals
-	inputs   []textinput.Model
-	focusIdx int
-
-	width  int
-	height int
+	inputs    []textinput.Model
+	focusIdx  int
+	errMsg    string
+	width     int
+	height    int
 }
 
 func NewModalModel() ModalModel {
@@ -43,6 +44,7 @@ func (m *ModalModel) ShowConfirm(title, message string) {
 	m.Message = message
 	m.Confirmed = false
 	m.Cancelled = false
+	m.errMsg = ""
 }
 
 func (m *ModalModel) ShowAddAccount() {
@@ -51,6 +53,7 @@ func (m *ModalModel) ShowAddAccount() {
 	m.Message = ""
 	m.Confirmed = false
 	m.Cancelled = false
+	m.errMsg = ""
 
 	// Username
 	usernameInput := textinput.New()
@@ -81,6 +84,7 @@ func (m *ModalModel) Close() {
 	m.Type = ModalNone
 	m.inputs = nil
 	m.focusIdx = 0
+	m.errMsg = ""
 }
 
 func (m ModalModel) IsOpen() bool { return m.Type != ModalNone }
@@ -90,6 +94,60 @@ func (m ModalModel) GetCredentials() (string, string) {
 		return m.inputs[0].Value(), m.inputs[1].Value()
 	}
 	return "", ""
+}
+
+func (m *ModalModel) validate() bool {
+	if len(m.inputs) < 2 {
+		return false
+	}
+	username := m.inputs[0].Value()
+	password := m.inputs[1].Value()
+
+	if username == "" {
+		m.errMsg = "Username is required"
+		return false
+	}
+	if len(username) < 3 {
+		m.errMsg = "Username must be at least 3 characters"
+		return false
+	}
+	if strings.ContainsAny(username, " \t\n\r") {
+		m.errMsg = "Username cannot contain whitespace"
+		return false
+	}
+	if !isPrintable(username) {
+		m.errMsg = "Username contains invalid characters"
+		return false
+	}
+
+	if password == "" {
+		m.errMsg = "Password is required"
+		return false
+	}
+	if len(password) < 4 {
+		m.errMsg = "Password must be at least 4 characters"
+		return false
+	}
+	if strings.ContainsAny(password, " \t\n\r") {
+		m.errMsg = "Password cannot contain whitespace"
+		return false
+	}
+	if !isPrintable(password) {
+		m.errMsg = "Password contains invalid characters"
+		return false
+	}
+
+	m.errMsg = ""
+	return true
+}
+
+func isPrintable(s string) bool {
+	for _, r := range s {
+		if !unicode.IsPrint(r) || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
@@ -112,7 +170,7 @@ func (m *ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 			if m.Type == ModalAddAccount {
 				// If on last field → submit
 				if m.focusIdx == len(m.inputs)-1 {
-					if m.inputs[0].Value() != "" && m.inputs[1].Value() != "" {
+					if m.validate() {
 						m.Confirmed = true
 						return *m, nil
 					}
@@ -183,6 +241,10 @@ func (m ModalModel) View() string {
 		for i, input := range m.inputs {
 			label := styles.InputLabel.Render(labels[i])
 			lines = append(lines, fmt.Sprintf("%s\n%s", label, input.View()))
+		}
+
+		if m.errMsg != "" {
+			lines = append(lines, styles.ErrorMessage.Render("  "+m.errMsg))
 		}
 
 		content = fmt.Sprintf(

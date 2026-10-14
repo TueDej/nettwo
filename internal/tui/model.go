@@ -69,6 +69,8 @@ func (m RootModel) Init() tea.Cmd {
 }
 
 func (m *RootModel) handleWindowSizeMsg(msg tea.WindowSizeMsg) {
+	// Keep the real size so the "terminal too small" view stays reachable;
+	// downstream components clamp their own panel math.
 	m.width = msg.Width
 	m.height = msg.Height
 
@@ -155,7 +157,12 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only auto-fetch volumes if there are accounts to fetch for
 		if len(msg.Accounts) > 0 {
 			m.dashboard.SetLoading(true, "Fetching volumes...")
-			return m, tea.Batch(commands.FetchAllVolumesCmdWithContext(context.Background(), msg.Accounts, m.refreshGeneration, 0), m.nextSpinnerTick())
+			if m.refreshCancel != nil {
+				m.refreshCancel()
+			}
+			var refreshCtx context.Context
+			refreshCtx, m.refreshCancel = context.WithCancel(context.Background())
+			return m, tea.Batch(commands.FetchAllVolumesCmdWithContext(refreshCtx, msg.Accounts, m.refreshGeneration, 0), m.nextSpinnerTick())
 		}
 		m.dashboard.SetLoading(false, "")
 		return m, nil
@@ -185,18 +192,26 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loggingIn = false
 		m.loginCtx = nil
 		m.loginCancel = nil
-		m.currentView = dashboardView
+
+		// Set result on login view
 		if msg.Err != nil {
+			m.login.SetResult(false, fmt.Sprintf("Login failed: %v", msg.Err))
 			m.dashboard.AddActivity(fmt.Sprintf("Login failed: %v", msg.Err), false)
 		} else {
+			m.login.SetResult(msg.Success, msg.Message)
 			if msg.Success {
 				m.dashboard.SetLoggedIn(m.pendingUsername)
 			} else {
 				m.dashboard.AddActivity(msg.Message, false)
 			}
 		}
+
+		// Stay on login view briefly to show result, then return to dashboard
 		m.pendingUsername = ""
-		return m, nil
+		m.modal.Close()  // Close any open modal
+		return m, tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
+			return returnToDashboardMsg{}
+		})
 
 	case commands.AccountSavedMsg:
 		m.currentView = dashboardView
@@ -235,6 +250,10 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.dashboard.IsLoading() {
 			return m, m.nextSpinnerTick()
 		}
+
+	case returnToDashboardMsg:
+		m.currentView = dashboardView
+		return m, nil
 	}
 
 	// Update current view for non-key messages
@@ -276,7 +295,9 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 				return m, nil
 			}
 			m.refreshGeneration++
-			m.refreshCancel = nil
+			if m.refreshCancel != nil {
+				m.refreshCancel()
+			}
 			var refreshCtx context.Context
 			refreshCtx, m.refreshCancel = context.WithCancel(context.Background())
 			m.dashboard.SetLoading(true, "Refreshing volumes...")
@@ -289,13 +310,17 @@ func (m *RootModel) handleDashboardKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	case "enter":
 		selected := m.dashboard.SelectedAccount()
 		if selected != "" {
+			if m.loginCancel != nil {
+				m.loginCancel()
+			}
 			m.pendingUsername = selected
 			m.currentView = loginView
 			m.loggingIn = true
 			m.loginGeneration++
 			generation := m.loginGeneration
-			m.loginCtx, m.loginCancel = context.WithCancel(context.Background())
+			m.loginCtx, m.loginCancel = context.WithTimeout(context.Background(), loginTimeout())
 			m.login.StartLogin(selected)
+			m.modal.Close()  // Close any open modal when switching views
 			// Start spinner animation + fetch credentials
 			return m, tea.Batch(m.startLoginCmd(selected, generation), m.nextSpinnerTick())
 		}
@@ -319,6 +344,7 @@ func (m *RootModel) handleLoginKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.currentView = dashboardView
 		m.loggingIn = false
 		m.pendingUsername = ""
+		m.modal.Close()  // Close any open modal when returning to dashboard
 		m.dashboard.AddActivity("Login cancelled", false)
 		return m, nil
 	}
@@ -354,10 +380,13 @@ func (m RootModel) View() tea.View {
 	case dashboardView:
 		content = m.dashboard.View()
 	case loginView:
-		// Show dashboard underneath, login centered on top
-		dash := m.dashboard.View()
-		login := m.login.View()
-		content = lipgloss.JoinVertical(lipgloss.Top, dash, login)
+		// Center the login box instead of stacking it under the
+		// dashboard, which overflowed the terminal height.
+		content = lipgloss.Place(
+			m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			m.login.View(),
+		)
 	}
 
 	// Render modal on top of everything
@@ -379,6 +408,15 @@ func (m RootModel) View() tea.View {
 
 // --- Login credential helpers ---
 
+func loginTimeout() time.Duration {
+	cfg, err := config.Load()
+	if err != nil || cfg.RequestTimeout <= 0 {
+		return 30 * time.Second
+	}
+	// Cover the full request/retry budget plus server think time.
+	return time.Duration(cfg.RequestTimeout)*time.Second + 15*time.Second
+}
+
 func (m RootModel) startLoginCmd(username string, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		account, err := config.GetAccount(username)
@@ -398,6 +436,8 @@ type startAuthMsg struct {
 // --- Spinner animation ---
 
 type tickSpinnerMsg struct{}
+
+type returnToDashboardMsg struct{}
 
 func (m RootModel) nextSpinnerTick() tea.Cmd {
 	// tea.Tick fires after the given duration

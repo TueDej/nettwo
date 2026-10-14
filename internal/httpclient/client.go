@@ -3,14 +3,11 @@ package httpclient
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"os"
-	"path/filepath"
 	"time"
 
 	"nettwo/internal/config"
@@ -26,16 +23,7 @@ type Client struct {
 }
 
 func New(cfg *config.Config) (*Client, error) {
-	c, err := NewClean(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.loadCookies(); err != nil {
-		ui.Debug("failed to load cookies: " + err.Error())
-	}
-
-	return c, nil
+	return NewClean(cfg)
 }
 
 func NewClean(cfg *config.Config) (*Client, error) {
@@ -69,18 +57,24 @@ func NewClean(cfg *config.Config) (*Client, error) {
 }
 
 func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response, error) {
-	if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
+	replayable := req.Body == nil || req.GetBody != nil
+	safeMethod := req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodOptions
+	if !replayable {
 		maxRetries = 0
 	}
+	effectiveMax := maxRetries
 	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	for attempt := 0; attempt <= effectiveMax; attempt++ {
 		if attempt > 0 {
 			delay := time.Duration(attempt*attempt) * time.Second
-			ui.Debug(fmt.Sprintf("retrying request: attempt %d delay %v", attempt, delay))
-			ui.StartSpinner(fmt.Sprintf("Retrying... (attempt %d/%d)", attempt, maxRetries))
+			if !ui.IsQuiet() {
+				ui.Debug(fmt.Sprintf("retrying request: attempt %d delay %v", attempt, delay))
+			}
+			ui.StartSpinner(fmt.Sprintf("Retrying... (attempt %d/%d)", attempt, effectiveMax))
 			timer := time.NewTimer(delay)
 			select {
 			case <-req.Context().Done():
+				ui.StopSpinner()
 				if !timer.Stop() {
 					select {
 					case <-timer.C:
@@ -90,6 +84,7 @@ func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response,
 				return nil, req.Context().Err()
 			case <-timer.C:
 			}
+			ui.StopSpinner()
 		}
 
 		attemptReq := req
@@ -111,18 +106,25 @@ func (c *Client) DoWithRetry(req *http.Request, maxRetries int) (*http.Response,
 				return nil, req.Context().Err()
 			}
 			lastErr = err
-			ui.Debug(fmt.Sprintf("request failed: attempt %d error %v", attempt+1, err))
+			if !ui.IsQuiet() {
+				ui.Debug(fmt.Sprintf("request failed: attempt %d error %v", attempt+1, err))
+			}
 			continue
 		}
 
 		if resp.StatusCode >= 500 && resp.StatusCode < 600 {
-			if attempt == maxRetries {
+			// Only retry 5xx for safe methods: POST/PUT bodies may have
+			// been processed server-side, so don't replay them blindly.
+			// Transport errors above are still retried when replayable.
+			if !safeMethod || attempt == effectiveMax {
 				return resp, nil
 			}
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			lastErr = fmt.Errorf("server error: %d", resp.StatusCode)
-			ui.Debug(fmt.Sprintf("server error: status %d", resp.StatusCode))
+			if !ui.IsQuiet() {
+				ui.Debug(fmt.Sprintf("server error: status %d", resp.StatusCode))
+			}
 			continue
 		}
 
@@ -161,79 +163,4 @@ func (c *Client) GetCSRFToken(ctx context.Context) (string, error) {
 	}
 
 	return "", fmt.Errorf("CSRF token not found")
-}
-
-func (c *Client) SaveCookies() error {
-	parsedURL, err := url.Parse(c.baseURL)
-	if err != nil {
-		return fmt.Errorf("failed to parse base URL: %w", err)
-	}
-	cookies := c.httpClient.Jar.Cookies(parsedURL)
-	if len(cookies) == 0 {
-		return nil
-	}
-
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return err
-	}
-	cookieDir := filepath.Join(configDir, "cookies.json")
-	data, err := json.MarshalIndent(cookies, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return writeAtomic(cookieDir, data, 0600)
-}
-
-func (c *Client) loadCookies() error {
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return err
-	}
-	cookieDir := filepath.Join(configDir, "cookies.json")
-	data, err := os.ReadFile(cookieDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	parsedURL, err := url.Parse(c.baseURL)
-	if err != nil {
-		return fmt.Errorf("failed to parse base URL: %w", err)
-	}
-	var cookies []*http.Cookie
-	if err := json.Unmarshal(data, &cookies); err != nil {
-		return err
-	}
-
-	c.httpClient.Jar.SetCookies(parsedURL, cookies)
-	return nil
-}
-
-func (c *Client) Close() error {
-	return c.SaveCookies()
-}
-
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".nettwo-cookie-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

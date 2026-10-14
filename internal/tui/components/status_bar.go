@@ -8,10 +8,6 @@ import (
 	"nettwo/internal/tui/styles"
 )
 
-var spinnerFrames = []string{
-	"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
-}
-
 type StatusBarModel struct {
 	keys       []KeyBinding
 	width      int
@@ -29,10 +25,12 @@ func NewStatusBarModel() StatusBarModel {
 	return StatusBarModel{
 		keys: []KeyBinding{
 			{Key: "j/k", Description: "Navigate"},
+			{Key: "h/l", Description: "Page"},
 			{Key: "↵", Description: "Login"},
 			{Key: "a", Description: "Add"},
 			{Key: "d", Description: "Delete"},
 			{Key: "r", Description: "Refresh"},
+			{Key: "esc", Description: "Cancel/Back"},
 			{Key: "q", Description: "Quit"},
 		},
 	}
@@ -50,7 +48,7 @@ func (m *StatusBarModel) SetLoading(loading bool, msg string) {
 }
 
 func (m *StatusBarModel) Tick() {
-	m.spinIdx = (m.spinIdx + 1) % len(spinnerFrames)
+	m.spinIdx = (m.spinIdx + 1) % len(styles.SpinnerFrames)
 }
 
 func (m StatusBarModel) IsLoading() bool { return m.loading }
@@ -72,12 +70,18 @@ func (m StatusBarModel) View() string {
 		contentWidth = 0
 	}
 
+	// Narrow terminals: drop trailing key hints first, then elide.
+	for lipgloss.Width(left) > contentWidth && len(parts) > 1 {
+		parts = parts[:len(parts)-1]
+		left = strings.Join(parts, "    ")
+	}
+	if lipgloss.Width(left) > contentWidth {
+		left = truncateToWidth(left, contentWidth)
+	}
+
 	leftWidth := lipgloss.Width(left)
 	padding := contentWidth - leftWidth
-
-	// If still overflowing, truncate left content
 	if padding < 0 {
-		left = ""
 		padding = 0
 	}
 
@@ -89,7 +93,7 @@ func (m StatusBarModel) View() string {
 		Width(m.width).
 		Render("")
 	if m.loading {
-		frame := spinnerFrames[m.spinIdx%len(spinnerFrames)]
+		frame := styles.SpinnerFrames[m.spinIdx%len(styles.SpinnerFrames)]
 		loadingLine = styles.StatusBar.
 			Foreground(styles.Primary).
 			Width(m.width).
@@ -103,4 +107,44 @@ func (m StatusBarModel) View() string {
 	// Always reserve the loading line so the help bar stays at a fixed
 	// vertical position while a refresh starts or finishes.
 	return loadingLine + "\n" + keybindLine + "\n" + emptyLine
+}
+
+// truncateToWidth elides a (possibly styled) string to fit cells. Styled
+// truncation would need ANSI-aware slicing, so we elide plain text —
+// preferable to blanking all hints on narrow terminals.
+func truncateToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	runes := []rune(stripANSI(s))
+	if len(runes) > width {
+		if width == 1 {
+			return "…"
+		}
+		return string(runes[:width-1]) + "…"
+	}
+	return s
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	inSeq := false
+	for i := 0; i < len(s); i++ {
+		if !inSeq && s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			inSeq = true
+			i++
+			continue
+		}
+		if inSeq {
+			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
+				inSeq = false
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }

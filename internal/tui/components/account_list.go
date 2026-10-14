@@ -99,10 +99,17 @@ func NewAccountListModel() AccountListModel {
 }
 
 func (m *AccountListModel) SetSize(width, height int) {
+	if width < 0 {
+		width = 0
+	}
 	m.width = width
 	m.height = height
+	listHeight := height - 2 // account for title
+	if listHeight < 1 {
+		listHeight = 1
+	}
 	m.list.SetWidth(width)
-	m.list.SetHeight(height - 2) // account for title
+	m.list.SetHeight(listHeight)
 }
 
 func (m *AccountListModel) UpdateAccounts(accounts []string, volumes map[string]string) {

@@ -22,6 +22,11 @@ var (
 
 // Component styles
 var (
+	// Spinner frames for loading animations
+	SpinnerFrames = []string{
+		"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+	}
+
 	Title = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(Primary)

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -101,6 +100,20 @@ func runLogin(ctx context.Context) error {
 		return fmt.Errorf("username and password are required")
 	}
 
+	// Check if account exists and prompt for confirmation when interactive
+	if ui.IsTerminal() {
+		exists, err := config.AccountExists(username)
+		if err != nil {
+			ui.Warn("Failed to check existing account: " + err.Error())
+		} else if exists {
+			confirmed, err := ui.Confirm(fmt.Sprintf("Account %q already exists. Overwrite?", username))
+			if err != nil || !confirmed {
+				ui.Info("Cancelled")
+				return nil
+			}
+		}
+	}
+
 	// Save account for future use (AddAccount updates password if user exists).
 	if err := config.AddAccount(username, password); err != nil {
 		ui.Warn("Failed to save account: " + err.Error())
@@ -125,31 +138,26 @@ func runLogin(ctx context.Context) error {
 }
 
 func fetchAllVolumes(ctx context.Context, accounts []string) map[string]string {
-	volumes := make(map[string]string)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
+	// Build account map for batch fetch
+	accountMap := make(map[string]string)
 	for _, acc := range accounts {
-		wg.Add(1)
-		go func(username string) {
-			defer wg.Done()
-			account, err := config.GetAccount(username)
-			if err != nil {
-				ui.Debug(fmt.Sprintf("volume fetch: failed to get account %s: %v", username, err))
-				return
-			}
-			vol, err := auth.GetRemainingVolume(ctx, username, account.Password)
-			if err != nil {
-				ui.Debug(fmt.Sprintf("volume fetch: %s failed: %v", username, err))
-				return
-			}
-			ui.Debug(fmt.Sprintf("volume fetch: %s -> %s", username, vol))
-			mu.Lock()
-			volumes[username] = vol
-			mu.Unlock()
-		}(acc)
+		account, err := config.GetAccount(acc)
+		if err != nil {
+			ui.Debug(fmt.Sprintf("volume fetch: failed to get account %s: %v", acc, err))
+			continue
+		}
+		accountMap[acc] = account.Password
 	}
 
-	wg.Wait()
+	volumes, err := auth.GetRemainingVolumesBatch(ctx, accountMap)
+	if err != nil {
+		ui.Debug(fmt.Sprintf("volume batch fetch failed: %v", err))
+		return make(map[string]string)
+	}
+
+	for username, vol := range volumes {
+		ui.Debug(fmt.Sprintf("volume fetch: %s -> %s", username, vol))
+	}
+
 	return volumes
 }

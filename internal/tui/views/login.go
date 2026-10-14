@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -16,11 +17,12 @@ type LoginModel struct {
 	spinIdx  int // spinner frame index
 	width    int
 	height   int
-}
 
-// spinnerFrames — a compact braille spinner
-var spinnerFrames = []string{
-	"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+	// Result state
+	resultMsg   string
+	resultError bool
+	showResult  bool
+	resultTime  time.Time
 }
 
 func NewLoginModel() LoginModel {
@@ -35,10 +37,26 @@ func (m *LoginModel) SetSize(width, height int) {
 func (m *LoginModel) StartLogin(username string) {
 	m.username = username
 	m.spinIdx = 0
+	m.showResult = false
+	m.resultMsg = ""
+	m.resultError = false
+}
+
+func (m *LoginModel) SetResult(success bool, message string) {
+	m.showResult = true
+	m.resultMsg = message
+	m.resultError = !success
+	m.resultTime = time.Now()
 }
 
 func (m *LoginModel) Tick() {
-	m.spinIdx = (m.spinIdx + 1) % len(spinnerFrames)
+	if !m.showResult {
+		m.spinIdx = (m.spinIdx + 1) % len(styles.SpinnerFrames)
+	}
+}
+
+func (m *LoginModel) IsShowingResult() bool {
+	return m.showResult
 }
 
 func (m *LoginModel) Update(msg tea.Msg) (LoginModel, tea.Cmd) {
@@ -58,12 +76,29 @@ func (m LoginModel) View() string {
 	lines = append(lines, header)
 	lines = append(lines, "")
 
-	frame := spinnerFrames[m.spinIdx%len(spinnerFrames)]
-	spin := lipgloss.NewStyle().Foreground(styles.Primary).Render(frame)
-	msg := lipgloss.NewStyle().Foreground(styles.Foreground).Render("Authenticating...")
-	lines = append(lines, fmt.Sprintf("  %s  %s", spin, msg))
-	lines = append(lines, "")
-	lines = append(lines, styles.HelpText.Render("  Press [esc] to cancel"))
+	if m.showResult {
+		// Show result
+		var icon string
+		var style lipgloss.Style
+		if m.resultError {
+			icon = styles.ErrorMessage.Render("✗")
+			style = styles.ErrorMessage
+		} else {
+			icon = styles.SuccessMessage.Render("✓")
+			style = styles.SuccessMessage
+		}
+		lines = append(lines, fmt.Sprintf("  %s  %s", icon, style.Render(m.resultMsg)))
+		lines = append(lines, "")
+		lines = append(lines, styles.HelpText.Render("  Press [esc] to return"))
+	} else {
+		// Show spinner
+		frame := styles.SpinnerFrames[m.spinIdx%len(styles.SpinnerFrames)]
+		spin := lipgloss.NewStyle().Foreground(styles.Primary).Render(frame)
+		msg := lipgloss.NewStyle().Foreground(styles.Foreground).Render("Authenticating...")
+		lines = append(lines, fmt.Sprintf("  %s  %s", spin, msg))
+		lines = append(lines, "")
+		lines = append(lines, styles.HelpText.Render("  Press [esc] to cancel"))
+	}
 
 	content := strings.Join(lines, "\n")
 

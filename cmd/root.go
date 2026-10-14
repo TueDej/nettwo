@@ -47,7 +47,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	rootCmd.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version information")
 	rootCmd.Flags().BoolP("help", "h", false, "help for nettwo")
-	rootCmd.PersistentFlags().BoolVarP(&autoMode, "auto", "k", false, "Auto-connect to the last connected user")
+	// --auto only applies to root command (no subcommand), not to tui subcommand
+	rootCmd.Flags().BoolVarP(&autoMode, "auto", "k", false, "Auto-connect to the last connected user")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(accountCmd)
@@ -60,7 +61,8 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		printVersion()
 		return nil
 	}
-	if autoMode {
+	// Only auto-login if no subcommand was provided (i.e., direct invocation)
+	if autoMode && cmd.Name() == "nettwo" && len(args) == 0 {
 		return runAutoLogin(cmd.Context())
 	}
 	return runTUI(cmd, args)

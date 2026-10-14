@@ -63,12 +63,36 @@ var accountDeleteCmd = &cobra.Command{
 }
 
 var accountAddCmd = &cobra.Command{
-	Use:   "add <username> <password>",
+	Use:   "add <username> [password]",
 	Short: "Add a new account",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		username := args[0]
-		password := args[1]
+		password := ""
+
+		interactive, _ := cmd.Flags().GetBool("interactive")
+
+		if len(args) == 2 {
+			password = args[1]
+		} else if interactive {
+			password = ui.PromptPassword("Enter password: ")
+		} else {
+			return fmt.Errorf("password required (use -i/--interactive to prompt)")
+		}
+
+		// Check if account exists and prompt for confirmation when interactive
+		if ui.IsTerminal() || interactive {
+			exists, err := config.AccountExists(username)
+			if err != nil {
+				ui.Warn("Failed to check existing account: " + err.Error())
+			} else if exists {
+				confirmed, err := ui.Confirm(fmt.Sprintf("Account %q already exists. Overwrite?", username))
+				if err != nil || !confirmed {
+					ui.Info("Cancelled")
+					return nil
+				}
+			}
+		}
 
 		if err := config.AddAccount(username, password); err != nil {
 			return fmt.Errorf("failed to add account: %w", err)
@@ -82,4 +106,6 @@ func init() {
 	accountCmd.AddCommand(accountListCmd)
 	accountCmd.AddCommand(accountDeleteCmd)
 	accountCmd.AddCommand(accountAddCmd)
+
+	accountAddCmd.Flags().BoolP("interactive", "i", false, "Prompt for password interactively")
 }

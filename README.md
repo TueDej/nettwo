@@ -52,7 +52,7 @@ Environment variables:
 | `NETTWO_REQUEST_TIMEOUT` | `30` | Per-request timeout (seconds) |
 | `NETTWO_MAX_RETRIES` | `3` | Max retries for failed requests |
 
-TLS verification is disabled — the portal certificates are unreliable. Use a trusted network.
+TLS verification is enabled by default. Only set `insecure_skip_verify: true` in `config.yaml` if the portal certificates fail on your network — and prefer a trusted network when you do.
 
 ## Build
 

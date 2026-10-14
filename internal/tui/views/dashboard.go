@@ -46,7 +46,9 @@ func (m *DashboardModel) SetSize(width, height int) {
 	m.height = height
 
 	leftWidth := width * 38 / 100
-	panelHeight := height - 9
+	// View renders: leading newline(1) + header(4) + 2 blank/newlines +
+	// panels + newline(1) + status bar(3) = panels + 11.
+	panelHeight := height - 11
 	if panelHeight < 3 {
 		panelHeight = 3
 	}
@@ -125,9 +127,16 @@ func (m DashboardModel) View() string {
 
 	// === Panels ===
 	leftWidth := m.width * 38 / 100
+	if leftWidth < 10 {
+		leftWidth = 10
+	}
 	rightWidth := m.width - leftWidth - 1
+	if rightWidth < 10 {
+		rightWidth = 10
+		leftWidth = m.width - rightWidth - 1
+	}
 
-	panelHeight := m.height - 9
+	panelHeight := m.height - 11
 	if panelHeight < 3 {
 		panelHeight = 3
 	}
@@ -205,6 +214,8 @@ func (m DashboardModel) renderStatusPanel() string {
 func formatTimeAgo(t time.Time) string {
 	d := time.Since(t)
 	switch {
+	case d < 10*time.Second:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:

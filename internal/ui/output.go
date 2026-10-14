@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"nettwo/internal/tui/styles"
+
 	"golang.org/x/term"
 )
 
@@ -90,7 +92,6 @@ func StartSpinner(msg string) {
 	spinnerRun = true
 
 	go func(stop chan struct{}, msg string) {
-		spinners := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		i := 0
 		ticker := time.NewTicker(80 * time.Millisecond)
 		defer ticker.Stop()
@@ -106,7 +107,7 @@ func StartSpinner(msg string) {
 					mu.Unlock()
 					return
 				}
-				fmt.Fprintf(os.Stderr, "\r\033[36m%s\033[0m %s", spinners[i%len(spinners)], msg)
+				fmt.Fprintf(os.Stderr, "\r\033[36m%s\033[0m %s", styles.SpinnerFrames[i%len(styles.SpinnerFrames)], msg)
 				i++
 				mu.Unlock()
 			}
@@ -123,11 +124,12 @@ func StopSpinner() {
 		close(spinnerStop)
 		spinnerStop = nil
 	}
+
 	if silenced {
 		return
 	}
 
-	// Clear the spinner line immediately
+	// Always clear the spinner line to avoid artifacts when switching to TUI
 	fmt.Fprint(os.Stderr, "\r\033[K")
 }
 
@@ -197,6 +199,11 @@ func readLine(fd *os.File) ([]byte, error) {
 
 func IsQuiet() bool {
 	return quietMode
+}
+
+// IsTerminal returns true if stdin is a terminal (interactive session).
+func IsTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 func Confirm(prompt string) (bool, error) {

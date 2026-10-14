@@ -63,35 +63,21 @@ func FetchAllVolumesCmdMinDuration(accounts []string, minimum time.Duration) tea
 func FetchAllVolumesCmdWithContext(ctx context.Context, accounts []string, generation uint64, minimum time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		started := time.Now()
-		volumes := make(map[string]string)
-		type result struct {
-			username string
-			volume   string
-			err      error
-		}
 
-		results := make(chan result, len(accounts))
+		// Build account map for batch fetching
+		accountMap := make(map[string]string)
 		for _, acc := range accounts {
-			go func(username string) {
-				account, err := config.GetAccount(username)
-				if err != nil {
-					results <- result{username: username, err: err}
-					return
-				}
-				vol, err := auth.GetRemainingVolume(ctx, username, account.Password)
-				if err != nil {
-					results <- result{username: username, err: err}
-					return
-				}
-				results <- result{username: username, volume: vol}
-			}(acc)
+			account, err := config.GetAccount(acc)
+			if err != nil {
+				continue
+			}
+			accountMap[acc] = account.Password
 		}
 
-		for i := 0; i < len(accounts); i++ {
-			r := <-results
-			if r.err == nil {
-				volumes[r.username] = r.volume
-			}
+		volumes, err := auth.GetRemainingVolumesBatch(ctx, accountMap)
+		if err != nil {
+			// On batch error, fall back to empty volumes
+			volumes = make(map[string]string)
 		}
 
 		if remaining := minimum - time.Since(started); remaining > 0 {
