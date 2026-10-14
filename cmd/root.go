@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,8 +23,10 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "nettwo",
-	Short: "Sharif University network authentication CLI",
+	Use:           "nettwo",
+	Short:         "Sharif University network authentication CLI",
+	SilenceErrors: true,
+	SilenceUsage:  true,
 	Long: `nettwo authenticates to the Sharif University network portal (net2.sharif.edu)
 and activates the internet gateway connection.
 
@@ -76,13 +79,22 @@ var tuiCmd = &cobra.Command{
 }
 
 func runTUI(cmd *cobra.Command, args []string) error {
+	// Windows: re-open in a fresh terminal when started without a console.
+	ui.EnsureConsole()
 	ui.SetSilenced(true)
 	defer ui.SetSilenced(false)
 
 	m := tui.NewRootModel()
 	p := tea.NewProgram(m)
-	_, err := p.Run()
-	return err
+	if _, err := p.Run(); err != nil {
+		// Un-silence so the failure is visible, then keep an
+		// Explorer-owned window open long enough to be read.
+		ui.SetSilenced(false)
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		ui.PauseBeforeExit()
+		os.Exit(1)
+	}
+	return nil
 }
 
 var versionCmd = &cobra.Command{
