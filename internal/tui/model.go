@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	minWidth  = 40
-	minHeight = 10
+	minWidth = 40
 )
 
 type viewState int
@@ -361,10 +360,13 @@ func (m RootModel) View() tea.View {
 		return tea.NewView(styles.InfoMessage.Render("  Initializing..."))
 	}
 
-	// Minimum terminal size check
-	if m.width < minWidth || m.height < minHeight {
-		msg := fmt.Sprintf("Terminal too small (%dx%d)\nMinimum: %dx%d\n\nPlease resize your terminal.",
-			m.width, m.height, minWidth, minHeight)
+	// Minimum terminal size check: the dashboard needs room for its chrome,
+	// the smallest useful panels, and the key hints — which take more lines
+	// the narrower the terminal is.
+	if m.width < minWidth || m.height < m.dashboard.MinHeight(m.width) {
+		minimum := fmt.Sprintf("%dx%d", minWidth, m.dashboard.MinHeight(m.width))
+		msg := fmt.Sprintf("Terminal too small (%dx%d)\nMinimum: %s\n\nPlease resize your terminal.",
+			m.width, m.height, minimum)
 		return tea.NewView(styles.ErrorMessage.Render("  " + msg))
 	}
 

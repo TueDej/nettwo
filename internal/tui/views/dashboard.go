@@ -41,20 +41,102 @@ func NewDashboardModel() DashboardModel {
 	}
 }
 
+// Layout constants for the dashboard's two panels.
+const (
+	// chromeHeight is everything around the panels in View(): the leading
+	// newline, the four-line header, the blank line under it and the newline
+	// above the status bar. Everything else is panels + status bar.
+	chromeHeight = 6
+
+	// panelChromeHeight is what PanelStyle adds around its content: the
+	// rounded border (2) plus its vertical padding (2).
+	panelChromeHeight = 4
+
+	// panelPaddingWidth is what PanelStyle takes horizontally (2 per side).
+	panelPaddingWidth = 6
+
+	// minPanelHeight keeps a panel legible: its chrome plus a title and a row.
+	minPanelHeight = 7
+)
+
 func (m *DashboardModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-
-	leftWidth := width * 38 / 100
-	// View renders: leading newline(1) + header(4) + 2 blank/newlines +
-	// panels + newline(1) + status bar(3) = panels + 11.
-	panelHeight := height - 11
-	if panelHeight < 3 {
-		panelHeight = 3
-	}
-
-	m.accountList.SetSize(leftWidth-2, panelHeight-2)
 	m.statusBar.SetWidth(width)
+
+	panelHeight := m.panelHeight()
+	leftWidth, _ := m.panelWidths()
+
+	// The list gets the panel's inner width, so nothing wraps (and grows the
+	// panel) once the panel is drawn, and a height whose rendered content
+	// plus the panel chrome lands exactly on panelHeight.
+	m.accountList.SetSize(innerPanelWidth(leftWidth), panelHeight-panelChromeHeight+2)
+}
+
+// panelWidths splits the terminal between the two panels and the gap.
+func (m DashboardModel) panelWidths() (left, right int) {
+	left = m.width * 38 / 100
+	if left < 10 {
+		left = 10
+	}
+	right = m.width - left - 1
+	if right < 10 {
+		right = 10
+		left = m.width - right - 1
+	}
+	return left, right
+}
+
+// innerPanelWidth is the width PanelStyle leaves for content.
+func innerPanelWidth(panel int) int {
+	w := panel - panelPaddingWidth
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+// panelHeight is the height the panels get once the chrome and the status bar
+// have taken their share. The status bar grows when key hints wrap onto extra
+// lines, so its height is asked for rather than assumed.
+func (m DashboardModel) panelHeight() int {
+	h := m.height - chromeHeight - m.statusBar.Height()
+	if h < minPanelHeight {
+		h = minPanelHeight
+	}
+	return h
+}
+
+// MinHeight returns the smallest window height this dashboard fills without
+// overflowing: the chrome, the smallest useful panels, and the status bar at
+// the given width — the narrower the terminal, the more lines the key hints
+// need.
+func (m DashboardModel) MinHeight(width int) int {
+	bar := components.NewStatusBarModel()
+	bar.SetWidth(width)
+	return chromeHeight + minPanelHeight + bar.Height()
+}
+
+// fitBlock trims a rendered block into a panel's content area: over-wide lines
+// are elided, and the block is padded or cut to exactly height lines. lipgloss
+// only ever pads, so without this a tall or wide block would push the rest of
+// the screen out of the window.
+func fitBlock(s string, width, height int) string {
+	if height < 1 {
+		height = 1
+	}
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, components.TruncateToWidth(line, width))
+	}
+	if len(out) > height {
+		out = out[:height]
+	}
+	for len(out) < height {
+		out = append(out, "")
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m *DashboardModel) UpdateAccounts(accounts []string, volumes map[string]string) {
@@ -126,31 +208,25 @@ func (m DashboardModel) View() string {
 	headerLine := lipgloss.Place(m.width, 4, lipgloss.Center, lipgloss.Center, title)
 
 	// === Panels ===
-	leftWidth := m.width * 38 / 100
-	if leftWidth < 10 {
-		leftWidth = 10
-	}
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 10 {
-		rightWidth = 10
-		leftWidth = m.width - rightWidth - 1
-	}
-
-	panelHeight := m.height - 11
-	if panelHeight < 3 {
-		panelHeight = 3
-	}
+	leftWidth, rightWidth := m.panelWidths()
+	panelHeight := m.panelHeight()
 
 	// Left panel — account list
-	leftContent := m.accountList.View()
-
+	leftContent := fitBlock(
+		m.accountList.View(),
+		innerPanelWidth(leftWidth),
+		panelHeight-panelChromeHeight,
+	)
 	leftPanel := styles.PanelStyle.
 		Width(leftWidth).
 		Height(panelHeight).
 		Render(leftContent)
 
 	// Right panel — status
-	rightContent := m.renderStatusPanel()
+	rightContent := m.renderStatusPanel(
+		innerPanelWidth(rightWidth),
+		panelHeight-panelChromeHeight,
+	)
 	rightPanel := styles.PanelStyle.
 		Width(rightWidth).
 		Height(panelHeight).
@@ -165,7 +241,9 @@ func (m DashboardModel) View() string {
 	return fmt.Sprintf("\n%s\n\n%s\n%s", headerLine, panels, statusBar)
 }
 
-func (m DashboardModel) renderStatusPanel() string {
+// renderStatusPanel renders the right panel, dropping trailing sections when
+// there is no room for them so the panel never outgrows its height.
+func (m DashboardModel) renderStatusPanel(width, height int) string {
 	var sections []string
 
 	// Connection Status section
@@ -208,7 +286,7 @@ func (m DashboardModel) renderStatusPanel() string {
 		sections = append(sections, styles.HelpText.Render("  No recent activity"))
 	}
 
-	return strings.Join(sections, "\n")
+	return fitBlock(strings.Join(sections, "\n"), width, height)
 }
 
 func formatTimeAgo(t time.Time) string {
