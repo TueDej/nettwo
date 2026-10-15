@@ -54,6 +54,17 @@ Environment variables:
 
 TLS verification is enabled by default. Only set `insecure_skip_verify: true` in `config.yaml` if the portal certificates fail on your network — and prefer a trusted network when you do.
 
+## Windows
+
+Double-clicking `nettwo.exe` in File Explorer opens a terminal window with the TUI
+running in it — the program re-opens itself in its own console, because the console
+Explorer hands to a GUI launch cannot host a full-screen TUI. Launching it from
+cmd, PowerShell, Windows Terminal or WSL keeps that terminal, as usual.
+
+If the program ever fails to start, the error stays on screen (it does not vanish
+with the window) and is written to `%APPDATA%\nettwo\launch.log` — send that file
+along when reporting a launch problem.
+
 ## Build
 
 Requires Go 1.26+.

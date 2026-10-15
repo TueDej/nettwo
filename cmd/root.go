@@ -79,22 +79,38 @@ var tuiCmd = &cobra.Command{
 }
 
 func runTUI(cmd *cobra.Command, args []string) error {
-	// Windows: re-open in a fresh terminal when started without a console.
+	// Windows: make sure we run in a console that can host a TUI, opening a
+	// fresh terminal window when needed (double-click, GUI launchers, …).
 	ui.EnsureConsole()
 	ui.SetSilenced(true)
 	defer ui.SetSilenced(false)
 
 	m := tui.NewRootModel()
 	p := tea.NewProgram(m)
-	if _, err := p.Run(); err != nil {
+
+	if _, err := runTUIProgram(p); err != nil {
 		// Un-silence so the failure is visible, then keep an
 		// Explorer-owned window open long enough to be read.
 		ui.SetSilenced(false)
 		fmt.Fprintln(os.Stderr, "Error:", err)
+		if logPath := ui.LogStartupFailure(err); logPath != "" {
+			fmt.Fprintln(os.Stderr, "Details written to", logPath)
+		}
 		ui.PauseBeforeExit()
 		os.Exit(1)
 	}
 	return nil
+}
+
+// runTUIProgram runs the program while catching panics, so a crash still ends
+// in the readable error path above instead of a bare stack trace.
+func runTUIProgram(p *tea.Program) (_ tea.Model, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("program panicked: %v", r)
+		}
+	}()
+	return p.Run()
 }
 
 var versionCmd = &cobra.Command{
